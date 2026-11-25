@@ -1,0 +1,81 @@
+name: Publish verified OTA pilot pair
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/publish-ota-pilot.yml']
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: write
+concurrency:
+  group: publish-rendezvous-ota-pilot
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: rendezvous-ota-test-pair
+          run-id: 45617282397
+          github-token: ${{ github.token }}
+          path: verified
+      - name: Validate exact signed artifacts and manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd verified
+          sha256sum -c SHA256SUMS.txt
+          signer=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
+          aapt=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)
+          for v in 0.2.0 0.2.1; do
+            "$signer" verify --print-certs "rendezvous-$v.apk" | tee "verified-$v.txt"
+            grep -F 'certificate SHA-256 digest: db1ea442769d42d0648e3baba2cc3c0bde3e164746c5ba0518e2de93c4560bae' "verified-$v.txt"
+            "$aapt" dump badging "rendezvous-$v.apk" > "badging-$v.txt"
+            grep -F "name='com.aivexus.rendezvous'" "badging-$v.txt"
+            grep -F "versionName='$v'" "badging-$v.txt"
+          done
+          grep -F "versionCode='2'" badging-0.2.0.txt
+          grep -F "versionCode='3'" badging-0.2.1.txt
+          python3 - <<'PY'
+          import hashlib,json,pathlib
+          m=json.loads(pathlib.Path('version.json').read_text())
+          a=pathlib.Path('rendezvous-0.2.1.apk')
+          assert m['version']=='0.2.1' and m['versionCode']==3 and m['channel']=='stable'
+          assert m['apk_url']==m['apkUrl']=='https://github.com/pilialvu75-hue/AIVEXUS-RendezVous/releases/download/v0.2.1/rendezvous-0.2.1.apk'
+          assert m['apk_sha256']==m['sha256']==hashlib.sha256(a.read_bytes()).hexdigest()
+          assert m['apk_size_bytes']==a.stat().st_size
+          PY
+      - name: Publish separate test-only releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for v in 0.2.0 0.2.1; do
+            if gh release view "v$v" >/dev/null 2>&1; then
+              tmp=$(mktemp -d)
+              gh release download "v$v" --pattern "rendezvous-$v.apk" --dir "$tmp"
+              cmp "$tmp/rendezvous-$v.apk" "verified/rendezvous-$v.apk"
+            else
+              gh release create "v$v" "verified/rendezvous-$v.apk" --target e4c2dc18cd3f47dbef5f57b49d831f992bfd90d0 --prerelease --title "RendezVous $v - OTA pilot (test only)" --notes "Experimental Android OTA pilot, fictional data only. Disposable signing certificate shared by this exact 0.2.0/0.2.1 pair. Not a production release."
+            fi
+          done
+          tmp=$(mktemp -d)
+          gh release download v0.2.1 --pattern rendezvous-0.2.1.apk --dir "$tmp"
+          cmp "$tmp/rendezvous-0.2.1.apk" verified/rendezvous-0.2.1.apk
+      - name: Activate update manifest only after release verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p update
+          cp verified/version.json update/version.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add update/version.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'Activate verified RendezVous 0.2.1 OTA pilot feed'
+            git push origin HEAD:main
+          fi
