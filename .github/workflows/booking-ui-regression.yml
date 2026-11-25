@@ -1,0 +1,61 @@
+name: Booking UI persistence regression
+on:
+  push:
+    branches: [main]
+    paths: ['preview/rv022.js', '.github/workflows/booking-ui-regression.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise actual calendar and booking UI in Chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive='AIVEXUS-RendezVous-0.2-OTA-integrazione (16).zip'
+          printf '%s  %s\n' '3915049d2094e46eae5434ef8e0cb784c2f738897eb02511f11351d663da8843' "$archive" | sha256sum -c -
+          unzip -q "$archive" -d pilot
+          cd pilot/overlay/android/app/src/main/assets
+          cp "$GITHUB_WORKSPACE/preview/rv022.js" .
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('index.html')
+          s=p.read_text()
+          assert s.count('</script></body></html>')==1
+          s=s.replace('</script></body></html>','</script><script src="rv022.js"></script><script src="ui-test.js"></script></body></html>')
+          p.write_text(s)
+          PY
+          cat > ui-test.js <<'JS'
+          (async()=>{
+            function check(condition,message){if(!condition)throw Error(message)}
+            const result=document.createElement('pre');result.id='test-result';document.body.append(result);
+            try{
+              localStorage.removeItem('rv-v1');db=Core.init();role='client';go('book');
+              const days=[];for(let i=1;days.length<2;i++){const n=new Date();n.setDate(n.getDate()+i);const key=[n.getFullYear(),String(n.getMonth()+1).padStart(2,'0'),String(n.getDate()).padStart(2,'0')].join('-');if(Core.slots(db,key,45).length)days.push(key)}
+              for(const [i,key] of days.entries()){
+                go('book');date=key;render();
+                document.querySelector('[data-day="'+key+'"]').click();
+                document.querySelector('.slot').click();
+                for(const [k,v] of Object.entries({family:'Test',given:'Jean',email:'jean@example.test',phone:'0000000000'})) document.getElementById('rv-'+k).value=v;
+                document.querySelector('#confirm button.full').click();
+                await new Promise(r=>setTimeout(r,50));
+                check(page==='mine','Booking did not navigate to client list');
+                check(document.querySelectorAll('#view .entry').length===i+1,'Client list count mismatch');
+                check(JSON.parse(localStorage.getItem('rv-v1')).appointments.length===i+1,'Persisted count mismatch');
+              }
+              role='admin';go('agenda');
+              check(document.querySelector('#view').textContent.includes('Tous les rendez-vous actifs (2)'),'Admin overview missing');
+              check(document.querySelector('[data-day="'+days[1]+'"]').textContent.includes('1 RDV'),'Calendar count missing');
+              role='client';db=JSON.parse(localStorage.getItem('rv-v1'));go('mine');
+              check(document.querySelectorAll('#view .entry').length===2,'Reloaded client list lost records');
+              result.textContent='RV_UI_REGRESSION_PASS';
+            }catch(e){result.textContent='RV_UI_REGRESSION_FAIL: '+e.message}
+          })();
+          JS
+          chrome=$(command -v google-chrome || command -v chromium)
+          "$chrome" --headless --no-sandbox --disable-dev-shm-usage --user-data-dir="$(mktemp -d)" --allow-file-access-from-files --virtual-time-budget=10000 --dump-dom "file://$PWD/index.html" > result.html
+          grep -F '<pre id="test-result">RV_UI_REGRESSION_PASS</pre>' result.html >/dev/null || { grep -o 'RV_UI_REGRESSION_FAIL[^<]*' result.html || true; exit 1; }
+          echo 'PASS: two bookings on separate dates, client list, admin overview and persisted records'
