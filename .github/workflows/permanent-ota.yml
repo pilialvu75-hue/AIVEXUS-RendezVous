@@ -44,7 +44,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-      - name: Prepare reviewed original source and isolated preview
+      - name: Prepare reviewed original source and calendar changes
         shell: bash
         run: |
           set -euo pipefail
@@ -56,11 +56,13 @@ jobs:
           cp preview/PreviewExport.kt pilot/overlay/android/app/src/main/kotlin/com/aivexus/rendezvous/
           python3 - <<'PY'
           from pathlib import Path
+          import os
+          version=os.environ['VERSION']
           p=Path('pilot/overlay/android/app/src/main/assets/index.html')
           s=p.read_text(); assert s.count('</script></body></html>')==1
           s=s.replace('</script></body></html>', '</script><script src="rv022.js"></script></body></html>')
-          s=s.replace('Version 0.1.0 · Prototype hors ligne','Version 0.2.2 · Aperçu local')
-          s=s.replace('<h2>Version 0.1.0</h2><p>Prototype local. Mise à jour automatique non intégrée.</p>','<h2>Version 0.2.2</h2><p>Aperçu isolé. Aucun compte vérifié.</p>')
+          s=s.replace('Version 0.1.0 · Prototype hors ligne',f'Version {version} · Pilote OTA')
+          s=s.replace('<h2>Version 0.1.0</h2><p>Prototype local. Mise à jour automatique non intégrée.</p>',f'<h2>Version {version}</h2><p>Pilote OTA. Aucun compte vérifié.</p>')
           p.write_text(s)
           p=Path('pilot/overlay/android/app/src/main/kotlin/com/aivexus/rendezvous/MainActivity.kt')
           s=p.read_text(); needle='web.loadUrl("file:///android_asset/index.html")'; assert s.count(needle)==1
@@ -174,10 +176,11 @@ jobs:
         run: |
           set -euo pipefail
           apk="signed/rendezvous-$VERSION.apk"
-          gh release create "v$VERSION" "$apk" signed/SHA256SUMS.txt --target "$GITHUB_SHA" --prerelease --title "RendezVous $VERSION - permanent OTA pilot" --notes "Test only; fictional data. Permanent signer pinned. First migration from disposable-key APK requires a fresh install; subsequent releases must preserve data."
+          gh release create "v$VERSION" "$apk" signed/SHA256SUMS.txt --target "$GITHUB_SHA" --draft --prerelease --title "RendezVous $VERSION - permanent OTA pilot" --notes "Test only; fictional data. Permanent signer pinned. First migration from disposable-key APK requires a fresh install; subsequent releases must preserve data."
           mkdir remote
           gh release download "v$VERSION" --pattern "rendezvous-$VERSION.apk" --dir remote
           cmp "$apk" "remote/rendezvous-$VERSION.apk"
+          gh release edit "v$VERSION" --draft=false --prerelease
           python3 - <<'PY'
           import os,hashlib,pathlib,json
           version=os.environ['VERSION']; code=int(os.environ['CODE'])
