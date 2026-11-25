@@ -1,0 +1,194 @@
+name: Permanent signed RendezVous OTA (owner-approved)
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Next test version only; do not skip the physical test'
+        required: true
+        type: choice
+        options: ['0.2.2', '0.2.3', '0.2.4']
+        default: '0.2.2'
+permissions:
+  contents: read
+concurrency:
+  group: rendezvous-permanent-ota
+  cancel-in-progress: false
+jobs:
+  preflight:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require owner-provisioned signing identity (no fallback)
+        env:
+          KEYSTORE: ${{ secrets.RV_KEYSTORE_B64 }}
+          KEY_PASSWORD: ${{ secrets.RV_KEY_PASSWORD }}
+          EXPECTED_SIGNER: ${{ vars.RV_SIGNER_SHA256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$KEYSTORE" && test -n "$KEY_PASSWORD" || { echo 'Missing permanent signing secrets; run signing/setup-signing.ps1'; exit 1; }
+          [[ "$EXPECTED_SIGNER" =~ ^[0-9a-f]{64}$ ]] || { echo 'Missing or invalid pinned signing fingerprint'; exit 1; }
+          echo 'Permanent signing configuration present.'
+  build:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Prepare reviewed original source and isolated preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive='AIVEXUS-RendezVous-0.2-OTA-integrazione (16).zip'
+          printf '%s  %s\n' '3915049d2094e46eae5434ef8e0cb784c2f738897eb02511f11351d663da8843' "$archive" | sha256sum -c -
+          unzip -q "$archive" -d pilot
+          node --check preview/rv022.js
+          cp preview/rv022.js pilot/overlay/android/app/src/main/assets/
+          cp preview/PreviewExport.kt pilot/overlay/android/app/src/main/kotlin/com/aivexus/rendezvous/
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('pilot/overlay/android/app/src/main/assets/index.html')
+          s=p.read_text(); assert s.count('</script></body></html>')==1
+          s=s.replace('</script></body></html>', '</script><script src="rv022.js"></script></body></html>')
+          s=s.replace('Version 0.1.0 · Prototype hors ligne','Version 0.2.2 · Aperçu local')
+          s=s.replace('<h2>Version 0.1.0</h2><p>Prototype local. Mise à jour automatique non intégrée.</p>','<h2>Version 0.2.2</h2><p>Aperçu isolé. Aucun compte vérifié.</p>')
+          p.write_text(s)
+          p=Path('pilot/overlay/android/app/src/main/kotlin/com/aivexus/rendezvous/MainActivity.kt')
+          s=p.read_text(); needle='web.loadUrl("file:///android_asset/index.html")'; assert s.count(needle)==1
+          s=s.replace(needle,'''web.webViewClient = object : android.webkit.WebViewClient() {
+                              override fun shouldOverrideUrlLoading(view: WebView, request: android.webkit.WebResourceRequest): Boolean = true
+                              override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean = true
+                          }
+                          web.addJavascriptInterface(PreviewExport(this@MainActivity), "RVExport")
+                          '''+needle)
+          p.write_text(s)
+          p=Path('pilot/overlay/android/app/src/main/res/xml/ota_paths.xml')
+          s=p.read_text().replace('</paths>','<cache-path name="export" path="rv-export/" /></paths>');p.write_text(s)
+          PY
+      - name: Original booking and backend regression
+        working-directory: pilot
+        run: |
+          node legacy-tests/test_core.js
+          cd server
+          python3 -m unittest -v test_server
+      - name: Build APK using original updater (not yet release-signed)
+        working-directory: pilot
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$VERSION" in
+            0.2.2) code=4 ;;
+            0.2.3) code=5 ;;
+            0.2.4) code=6 ;;
+            *) exit 1 ;;
+          esac
+          python3 prepare.py
+          cd generated
+          flutter pub get
+          flutter analyze --no-fatal-infos --no-fatal-warnings
+          flutter build apk --release --build-name "$VERSION" --build-number "$code"
+          mkdir -p ../../out
+          cp build/app/outputs/flutter-apk/app-release.apk ../../out/candidate.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-candidate
+          path: out/candidate.apk
+          if-no-files-found: error
+          retention-days: 1
+  sign-and-publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+      EXPECTED_SIGNER: ${{ vars.RV_SIGNER_SHA256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/download-artifact@v4
+        with:
+          name: unsigned-candidate
+          path: candidate
+      - name: Validate release sequence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$VERSION" in
+            0.2.2) previous=0.2.1; code=4 ;;
+            0.2.3) previous=0.2.2; code=5 ;;
+            0.2.4) previous=0.2.3; code=6 ;;
+            *) exit 1 ;;
+          esac
+          python3 -c 'import json,sys; m=json.load(open("update/version.json")); assert m["version"]==sys.argv[1] and m["versionCode"]==int(sys.argv[2])-1, "Release sequence mismatch"' "$previous" "$code"
+          echo "CODE=$code" >> "$GITHUB_ENV"
+          echo "PREVIOUS=$previous" >> "$GITHUB_ENV"
+          if gh release view "v$VERSION" >/dev/null 2>&1; then echo 'Release already exists; do not overwrite'; exit 1; fi
+          if [[ "$VERSION" != "0.2.2" ]]; then
+            mkdir previous
+            gh release download "v$previous" --pattern "rendezvous-$previous.apk" --dir previous
+            signer=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
+            "$signer" verify --print-certs "previous/rendezvous-$previous.apk" > previous/cert.txt
+            grep -F "certificate SHA-256 digest: $EXPECTED_SIGNER" previous/cert.txt
+          fi
+      - name: Sign with permanent owner key and check exact fingerprint
+        env:
+          KEYSTORE: ${{ secrets.RV_KEYSTORE_B64 }}
+          KEY_PASSWORD: ${{ secrets.RV_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          key=$(mktemp "$RUNNER_TEMP/rv-sign.XXXXXX")
+          trap 'rm -f "$key"' EXIT
+          printf '%s' "$KEYSTORE" | base64 -d > "$key"
+          signer=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
+          aapt=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)
+          mkdir signed
+          apk="signed/rendezvous-$VERSION.apk"
+          "$signer" sign --ks "$key" --ks-key-alias rendezvous --ks-pass env:KEY_PASSWORD --key-pass env:KEY_PASSWORD --out "$apk" candidate/candidate.apk
+          "$signer" verify --print-certs "$apk" | tee signed/signatures.txt
+          grep -F "certificate SHA-256 digest: $EXPECTED_SIGNER" signed/signatures.txt
+          "$aapt" dump badging "$apk" > signed/badging.txt
+          grep -F "name='com.aivexus.rendezvous'" signed/badging.txt
+          grep -F "versionCode='$CODE'" signed/badging.txt
+          grep -F "versionName='$VERSION'" signed/badging.txt
+          (cd signed && sha256sum *.apk > SHA256SUMS.txt)
+      - name: Publish APK then verify remote bytes before activating manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="signed/rendezvous-$VERSION.apk"
+          gh release create "v$VERSION" "$apk" signed/SHA256SUMS.txt --target "$GITHUB_SHA" --prerelease --title "RendezVous $VERSION - permanent OTA pilot" --notes "Test only; fictional data. Permanent signer pinned. First migration from disposable-key APK requires a fresh install; subsequent releases must preserve data."
+          mkdir remote
+          gh release download "v$VERSION" --pattern "rendezvous-$VERSION.apk" --dir remote
+          cmp "$apk" "remote/rendezvous-$VERSION.apk"
+          python3 - <<'PY'
+          import os,hashlib,pathlib,json
+          version=os.environ['VERSION']; code=int(os.environ['CODE'])
+          a=pathlib.Path('signed')/f'rendezvous-{version}.apk'
+          url=f'https://github.com/pilialvu75-hue/AIVEXUS-RendezVous/releases/download/v{version}/rendezvous-{version}.apk'
+          h=hashlib.sha256(a.read_bytes()).hexdigest()
+          m=dict(version=version,versionName=version,versionCode=code,channel='stable',min_supported='0.2.2',apk_url=url,apkUrl=url,sha256=h,apk_sha256=h,apk_size_bytes=a.stat().st_size,changelog='Pilote OTA — signature permanente',forceUpdate=False,critical=False)
+          pathlib.Path('update/version.json').write_text(json.dumps(m,indent=2)+'\n')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add update/version.json
+          git commit -m "Activate verified permanent-signer OTA $VERSION"
+          git push origin HEAD:main
