@@ -85,7 +85,22 @@
     oldAgenda();
     const input=el.querySelector('input[type=date]');if(input){const lab=input.previousElementSibling;input.replaceWith(monthView(true));lab?.remove()}
     const b=document.createElement('button');b.className='secondary full';b.textContent='Exporter tous les rendez-vous (.xlsx) par e-mail';b.onclick=exportAgenda;el.querySelector('.card')?.append(b);
+    // Keep the selected day visible, but never hide bookings on other dates.
+    const active=db.appointments.filter(a=>a.status!=='cancelled').sort((a,b)=>a.date.localeCompare(b.date)||a.start-b.start);
+    const month=el.querySelector('.rv-month');
+    const count=document.createElement('p');count.className='muted';
+    count.textContent=active.length+' rendez-vous actifs enregistrés · '+active.filter(a=>a.date===date).length+' le '+date;
+    month?.append(count);
+    const overview=document.createElement('section');overview.className='card';
+    overview.innerHTML='<h2>Tous les rendez-vous actifs ('+active.length+')</h2>'+ (active.length?active.map(a=>entry(a)).join(''):'<p>Aucun rendez-vous actif enregistré.</p>');
+    el.append(overview);
     el.querySelectorAll('[data-mail-id]').forEach(b=>b.onclick=()=>sendAppointment(b.dataset.mailId));
+  };
+  const oldMine=mine;
+  mine=function(){
+    oldMine();
+    const list=db.appointments.filter(a=>a.client===client);
+    if(!list.length&&db.appointments.length)el.insertAdjacentHTML('beforeend','<div class="card">Aucun rendez-vous associé à ce profil.</div>');
   };
   settings=function(){
     oldSettings();
