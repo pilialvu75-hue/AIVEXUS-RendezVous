@@ -10,7 +10,7 @@ on:
         required: true
         type: choice
         options: ['0.2.2', '0.2.3', '0.2.4']
-        default: '0.2.2'
+        default: '0.2.3'
 permissions:
   contents: read
 concurrency:
@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
-      VERSION: ${{ inputs.version || '0.2.2' }}
+      VERSION: ${{ inputs.version || '0.2.3' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -116,7 +116,7 @@ jobs:
     permissions:
       contents: write
     env:
-      VERSION: ${{ inputs.version || '0.2.2' }}
+      VERSION: ${{ inputs.version || '0.2.3' }}
       EXPECTED_SIGNER: ${{ vars.RV_SIGNER_SHA256 }}
     steps:
       - uses: actions/checkout@v4
