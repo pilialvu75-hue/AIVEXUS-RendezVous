@@ -1,0 +1,71 @@
+name: RendezVous OTA pilot - compile and verify
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'AIVEXUS-RendezVous-0.2-OTA-integrazione.zip'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rendezvous-ota-pair
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and extract reviewed source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '3915049d2094e46eae5434ef8e0cb784c2f738897eb02511f11351d663da8843  AIVEXUS-RendezVous-0.2-OTA-integrazione.zip' | sha256sum -c -
+          mkdir pilot
+          unzip -q AIVEXUS-RendezVous-0.2-OTA-integrazione.zip -d pilot
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Agenda and backend regression
+        working-directory: pilot
+        run: |
+          node legacy-tests/test_core.js
+          cd server
+          python3 -m unittest -v test_server
+      - name: Generate Flutter host and compile both APKs
+        working-directory: pilot
+        run: |
+          python3 prepare.py
+          python3 build-test-pair.py
+      - name: Verify package, version codes and identical signing certificates
+        working-directory: pilot
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk="$ANDROID_HOME"
+          signer=$(find "$sdk/build-tools" -type f -name apksigner | sort -V | tail -1)
+          aapt=$(find "$sdk/build-tools" -type f -name aapt | sort -V | tail -1)
+          test -x "$signer" && test -x "$aapt"
+          for v in 0.2.0 0.2.1; do
+            apk="test-pair/rendezvous-$v.apk"
+            "$signer" verify --print-certs "$apk" | tee "$apk.signatures.txt"
+            "$aapt" dump badging "$apk" | tee "$apk.badging.txt"
+            grep -F "name='com.aivexus.rendezvous'" "$apk.badging.txt"
+            grep -F "versionName='$v'" "$apk.badging.txt"
+          done
+          grep -F "versionCode='2'" test-pair/rendezvous-0.2.0.apk.badging.txt
+          grep -F "versionCode='3'" test-pair/rendezvous-0.2.1.apk.badging.txt
+          a=$(grep 'certificate SHA-256 digest:' test-pair/rendezvous-0.2.0.apk.signatures.txt)
+          b=$(grep 'certificate SHA-256 digest:' test-pair/rendezvous-0.2.1.apk.signatures.txt)
+          test -n "$a" && test "$a" = "$b"
+          (cd test-pair && sha256sum *.apk > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rendezvous-ota-test-pair
+          path: pilot/test-pair/
+          if-no-files-found: error
+          retention-days: 30
