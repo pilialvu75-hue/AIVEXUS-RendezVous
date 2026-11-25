@@ -48,14 +48,21 @@
     const c=document.getElementById('confirm');
     if(c&&chosen!==null&&!editing){const n=document.getElementById('name');if(n){n.previousElementSibling?.remove();n.remove()}c.insertBefore(profileForm(),c.querySelector('label[for=attach]')||c.firstChild)}
   };
+  let bookingPending=false;
   confirmBook=async function(){
+    if(bookingPending)return;
+    bookingPending=true;
+    const confirmButton=document.querySelector('#confirm button.full');
+    if(confirmButton)confirmButton.disabled=true;
+    try {
     const t=db.types.find(x=>x.id===kind),sel=chosen,d=date,id=editing;
     const existing=db.appointments.find(a=>a.id===id);
     const p=existing?existing.profile:readProfile();if(!existing&&!p)return;
     if(sel===null||!t)return toast('Sélectionnez un créneau.');
     let f;try{f=await readFile(document.getElementById('attach')?.files[0])}catch(e){return toast(e.message)}
     const a={id:id||uid(),client:existing?.client||client,name:existing?.name||p.given+' '+p.family,profile:p||null,type:t.id,duration:existing?.duration||t.duration,date:d,start:sel,status:'confirmed'};
-    if(update(()=>{if(!existing)db.profile=p;Core.reserve(db,a);if(f)db.docs.push({...f,id:uid(),client:a.client,from:role,date:new Date().toISOString(),appointment:a.id});db.messages.push({id:uid(),client:a.client,from:'system',body:'Rendez-vous '+(id?'déplacé':'confirmé')+' : '+d+' à '+Core.hh(sel)+'.',date:new Date().toISOString()})})){toast('Rendez-vous enregistré.');go(role==='admin'?'agenda':'mine')}
+    if(update(()=>{if(!existing)db.profile=p;Core.reserve(db,a);if(f)db.docs.push({...f,id:uid(),client:a.client,from:role,date:new Date().toISOString(),appointment:a.id});db.messages.push({id:uid(),client:a.client,from:'system',body:'Rendez-vous '+(id?'déplacé':'confirmé')+' : '+d+' à '+Core.hh(sel)+'.',date:new Date().toISOString()})})){const stored=JSON.parse(localStorage.getItem('rv-v1')||'null');if(!stored?.appointments?.some(x=>x.id===a.id&&x.client===a.client&&x.date===a.date&&x.start===a.start)){toast('Erreur : sauvegarde non vérifiée. Ne recréez pas ce rendez-vous.');return}go(role==='admin'?'agenda':'mine');toast('Rendez-vous enregistré et vérifié : '+d+' à '+Core.hh(sel)+'.')}
+    } catch(e){toast('Erreur de confirmation : '+e.message)} finally {bookingPending=false;if(confirmButton)confirmButton.disabled=false}
   };
   function row(a){const p=a.profile||{};return [a.date,Core.hh(a.start),Core.hh(a.start+a.duration),p.family||a.name,p.given||'',p.phone||'',p.email||'',db.types.find(t=>t.id===a.type)?.name||a.type,a.duration,a.status==='cancelled'?'Annulé':'Confirmé',db.docs.filter(d=>d.appointment===a.id).length]}
   const headers=['Date','Début','Fin','Nom','Prénom','Téléphone','E-mail','Motif','Durée (min)','Statut','Documents'];
@@ -100,7 +107,8 @@
   mine=function(){
     oldMine();
     const list=db.appointments.filter(a=>a.client===client);
-    if(!list.length&&db.appointments.length)el.insertAdjacentHTML('beforeend','<div class="card">Aucun rendez-vous associé à ce profil.</div>');
+    if(!list.length&&db.appointments.length)el.insertAdjacentHTML('beforeend','<div class="card">Aucun rendez-vous associé à ce profil de démonstration.</div>');
+    const count=document.createElement('p');count.className='muted';count.textContent=list.length+' rendez-vous associés à ce profil';el.append(count);
   };
   settings=function(){
     oldSettings();
@@ -108,6 +116,10 @@
     box.innerHTML='<h2>Export et messagerie</h2><label for="rv-mail">Adresse e-mail destinataire</label><input type="email" id="rv-mail" value="'+E(db.exportEmail||'')+'"><p class="muted">Le partage ouvre une application de messagerie : vérifiez le destinataire, puis confirmez l’envoi. Données fictives uniquement.</p><button id="rv-mail-save">Enregistrer</button>';
     box.querySelector('button').onclick=()=>{const a=clean(box.querySelector('input').value);if(!emailOK(a))return toast('Adresse invalide.');if(update(()=>db.exportEmail=a))toast('Adresse enregistrée.')};
     el.insertBefore(box,el.children[1]||null);
+    const diag=document.createElement('section');diag.className='card';
+    const title=document.createElement('h2');title.textContent='Diagnostic local (aucune donnée personnelle)';diag.append(title);
+    const details=document.createElement('p');details.className='muted';
+    try{const stored=JSON.parse(localStorage.getItem('rv-v1')||'null');const persisted=stored?.appointments||[];const own=persisted.filter(a=>a.client===client).length;details.textContent='En mémoire : '+db.appointments.length+' · Enregistrés : '+persisted.length+' · Associés au profil démo : '+own+' · Documents : '+(stored?.docs?.length||0);if(JSON.stringify(db)!==JSON.stringify(stored))details.textContent+=' · Écart mémoire/stockage détecté.';}catch(e){details.textContent='Lecture du stockage impossible. Ne pas effacer les données.'}diag.append(details);el.append(diag);
   };
   const style=document.createElement('style');style.textContent='.rv-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}.rv-day{min-width:0;padding:4px 0;font-size:14px;min-height:44px;border-radius:5px}.rv-day small{display:block;font-size:9px}.rv-heading{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:10px}.rv-heading strong{text-transform:capitalize}.rv-week{text-align:center;font-size:11px}.rv-free{background:#18552f;color:#fff}.rv-full{background:#791c2b;color:#fff}.rv-closed{background:#535d65;color:#fff}.rv-busy{background:#125566;color:#fff}.rv-day:disabled{opacity:1;cursor:default}.rv-selected{outline:3px solid #d6a128;outline-offset:1px}';
   document.head.append(style);
