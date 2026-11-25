@@ -1,0 +1,28 @@
+name: Registration prototype HTTP regression
+on:
+  push:
+    branches: [main]
+    paths: ['backend-registration/**', '.github/workflows/registration-tests.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply registration prototype and test original and new HTTP flows
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive='AIVEXUS-RendezVous-0.2-OTA-integrazione (16).zip'
+          printf '%s  %s\n' '3915049d2094e46eae5434ef8e0cb784c2f738897eb02511f11351d663da8843' "$archive" | sha256sum -c -
+          unzip -q "$archive" -d pilot
+          python3 backend-registration/apply.py pilot/server/server.py
+          cp backend-registration/test_registration.py pilot/server/
+          cd pilot/server
+          python3 -m unittest -v test_server
+          python3 -m unittest -v test_registration
