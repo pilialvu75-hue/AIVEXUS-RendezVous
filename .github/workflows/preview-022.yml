@@ -1,0 +1,93 @@
+name: RendezVous 0.2.2 isolated UI preview
+on:
+  push:
+    branches: [main]
+    paths: ['preview/**', '.github/workflows/preview-022.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rendezvous-preview-022
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Prepare reviewed original source and isolated preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive='AIVEXUS-RendezVous-0.2-OTA-integrazione (16).zip'
+          printf '%s  %s\n' '3915049d2094e46eae5434ef8e0cb784c2f738897eb02511f11351d663da8843' "$archive" | sha256sum -c -
+          unzip -q "$archive" -d pilot
+          node --check preview/rv022.js
+          cp preview/rv022.js pilot/overlay/android/app/src/main/assets/
+          cp preview/PreviewExport.kt pilot/overlay/android/app/src/main/kotlin/com/aivexus/rendezvous/
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('pilot/overlay/android/app/src/main/assets/index.html')
+          s=p.read_text(); assert s.count('</script></body></html>')==1
+          s=s.replace('</script></body></html>', '</script><script src="rv022.js"></script></body></html>')
+          s=s.replace('Version 0.1.0 · Prototype hors ligne','Version 0.2.2 · Aperçu local')
+          s=s.replace('<h2>Version 0.1.0</h2><p>Prototype local. Mise à jour automatique non intégrée.</p>','<h2>Version 0.2.2</h2><p>Aperçu isolé. Aucun compte vérifié.</p>')
+          p.write_text(s)
+          p=Path('pilot/overlay/android/app/src/main/kotlin/com/aivexus/rendezvous/MainActivity.kt')
+          s=p.read_text(); needle='web.loadUrl("file:///android_asset/index.html")'; assert s.count(needle)==1
+          s=s.replace(needle,'''web.webViewClient = object : android.webkit.WebViewClient() {
+                              override fun shouldOverrideUrlLoading(view: WebView, request: android.webkit.WebResourceRequest): Boolean = true
+                              override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean = true
+                          }
+                          web.addJavascriptInterface(PreviewExport(this@MainActivity), "RVExport")
+                          '''+needle)
+          p.write_text(s)
+          p=Path('pilot/overlay/android/app/src/main/res/xml/ota_paths.xml')
+          s=p.read_text().replace('</paths>','<cache-path name="export" path="rv-export/" /></paths>');p.write_text(s)
+          PY
+      - name: Original booking and backend regression
+        working-directory: pilot
+        run: |
+          node legacy-tests/test_core.js
+          cd server
+          python3 -m unittest -v test_server
+      - name: Build separate preview without replacing installed OTA pilot
+        working-directory: pilot
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 prepare.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('generated/android/app/build.gradle.kts')
+          s=p.read_text(); old='applicationId = "com.aivexus.rendezvous"'; assert s.count(old)==1
+          p.write_text(s.replace(old,'applicationId = "com.aivexus.rendezvous.preview"'))
+          p=Path('generated/android/app/src/main/AndroidManifest.xml')
+          s=p.read_text().replace('AIVEXUS RendezVous','RendezVous Preview'); p.write_text(s)
+          PY
+          cd generated
+          flutter pub get
+          flutter analyze --no-fatal-infos --no-fatal-warnings
+          flutter build apk --debug --build-name 0.2.2 --build-number 4
+          mkdir -p ../../out
+          cp build/app/outputs/flutter-apk/app-debug.apk ../../out/rendezvous-0.2.2-preview.apk
+          cd ../../out
+          signer=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
+          aapt=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)
+          "$signer" verify --print-certs rendezvous-0.2.2-preview.apk | tee signatures.txt
+          "$aapt" dump badging rendezvous-0.2.2-preview.apk | tee badging.txt
+          grep -F "name='com.aivexus.rendezvous.preview'" badging.txt
+          grep -F "versionName='0.2.2'" badging.txt
+          sha256sum *.apk > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rendezvous-0.2.2-isolated-preview
+          path: out/
+          if-no-files-found: error
