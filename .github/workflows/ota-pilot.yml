@@ -43,6 +43,35 @@ jobs:
         run: |
           python3 prepare.py
           python3 build-test-pair.py
+      - name: Sign both pilot APKs with one disposable test certificate
+        working-directory: pilot
+        shell: bash
+        run: |
+          set -euo pipefail
+          signer=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
+          test -x "$signer"
+          key="$RUNNER_TEMP/rendezvous-pilot.jks"
+          pass=$(openssl rand -hex 24)
+          echo "::add-mask::$pass"
+          export PILOT_KEY_PASSWORD="$pass"
+          keytool -genkeypair -keystore "$key" -storepass "$pass" -keypass "$pass" -alias rendezvous-pilot -keyalg RSA -keysize 2048 -validity 365 -dname 'CN=RendezVous OTA disposable pilot' -storetype PKCS12
+          for v in 0.2.0 0.2.1; do
+            apk="test-pair/rendezvous-$v.apk"
+            "$signer" sign --ks "$key" --ks-key-alias rendezvous-pilot --ks-pass env:PILOT_KEY_PASSWORD --key-pass env:PILOT_KEY_PASSWORD --out "$apk.resigned.apk" "$apk"
+            mv "$apk.resigned.apk" "$apk"
+            "$signer" verify "$apk"
+          done
+          rm -f "$key"
+          python3 - <<'PY'
+          import hashlib, json, pathlib
+          root = pathlib.Path('test-pair')
+          apk = root / 'rendezvous-0.2.1.apk'
+          path = root / 'version.json'
+          manifest = json.loads(path.read_text())
+          digest = hashlib.sha256(apk.read_bytes()).hexdigest()
+          manifest.update(sha256=digest, apk_sha256=digest, apk_size_bytes=apk.stat().st_size)
+          path.write_text(json.dumps(manifest, indent=2) + '\n')
+          PY
       - name: Verify package, version codes and identical signing certificates
         working-directory: pilot
         shell: bash
@@ -65,6 +94,8 @@ jobs:
           b=$(grep 'certificate SHA-256 digest:' test-pair/rendezvous-0.2.1.apk.signatures.txt)
           test -n "$a" && test "$a" = "$b"
           (cd test-pair && sha256sum *.apk > SHA256SUMS.txt)
+          python3 -c 'import hashlib,json,pathlib; p=pathlib.Path("test-pair"); m=json.loads((p/"version.json").read_text()); a=p/"rendezvous-0.2.1.apk"; assert m["apk_sha256"]==hashlib.sha256(a.read_bytes()).hexdigest() and m["apk_size_bytes"]==a.stat().st_size'
+          printf '%s\n' 'Disposable pilot pair: only install/update within this exact run; no medical data; not a production signature.' > test-pair/PILOT-NOTICE.txt
       - uses: actions/upload-artifact@v4
         with:
           name: rendezvous-ota-test-pair
