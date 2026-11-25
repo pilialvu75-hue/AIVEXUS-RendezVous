@@ -1,0 +1,36 @@
+name: Verify permanent signing setup
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/check-signing.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Verify keystore, password, private key alias and pinned public certificate
+        env:
+          RV_STORE: ${{ secrets.RV_KEYSTORE_B64 }}
+          RV_PASS: ${{ secrets.RV_KEY_PASSWORD }}
+          RV_EXPECTED: ${{ vars.RV_SIGNER_SHA256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$RV_STORE" || -z "$RV_PASS" ]]; then echo 'Signing secrets missing'; exit 1; fi
+          if ! [[ "$RV_EXPECTED" =~ ^[0-9a-f]{64}$ ]]; then echo 'Pinned fingerprint missing or invalid'; exit 1; fi
+          umask 077
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          printf '%s' "$RV_STORE" | base64 --decode > "$work/key.p12"
+          keytool -list -v -storetype PKCS12 -keystore "$work/key.p12" -storepass:env RV_PASS -alias rendezvous > "$work/info" 2>/dev/null || { echo 'Keystore, password or alias invalid'; exit 1; }
+          grep -q 'PrivateKeyEntry' "$work/info" || { echo 'Private key missing'; exit 1; }
+          keytool -exportcert -keystore "$work/key.p12" -storepass:env RV_PASS -alias rendezvous -file "$work/cert.der" >/dev/null 2>&1
+          actual=$(sha256sum "$work/cert.der" | cut -d' ' -f1)
+          [[ "$actual" == "$RV_EXPECTED" ]] || { echo 'Pinned certificate mismatch'; exit 1; }
+          echo 'PASS: permanent signing configuration verified; no secrets displayed.'
