@@ -3,7 +3,8 @@ on:
   push:
     branches: [main]
     paths:
-      - 'AIVEXUS-RendezVous-0.2-OTA-integrazione.zip'
+      - 'AIVEXUS-RendezVous-0.2-OTA-integrazione*.zip'
+      - '.github/workflows/ota-pilot.yml'
   workflow_dispatch:
 permissions:
   contents: read
@@ -20,9 +21,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo '3915049d2094e46eae5434ef8e0cb784c2f738897eb02511f11351d663da8843  AIVEXUS-RendezVous-0.2-OTA-integrazione.zip' | sha256sum -c -
+          archive='AIVEXUS-RendezVous-0.2-OTA-integrazione (16).zip'
+          printf '%s  %s\n' '3915049d2094e46eae5434ef8e0cb784c2f738897eb02511f11351d663da8843' "$archive" | sha256sum -c -
           mkdir pilot
-          unzip -q AIVEXUS-RendezVous-0.2-OTA-integrazione.zip -d pilot
+          unzip -q "$archive" -d pilot
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
