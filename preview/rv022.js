@@ -1,7 +1,7 @@
 /* RendezVous 0.2.2 UI preview. Fictional data only. */
 (() => {
   const el=document.getElementById('view');
-  const oldBook=book, oldAgenda=agenda, oldSettings=settings, oldEntry=entry;
+  const oldBook=book, oldAgenda=agenda, oldSettings=settings, oldEntry=entry, oldDocs=docs;
   const fmt=(y,m,d)=>[y,String(m+1).padStart(2,'0'),String(d).padStart(2,'0')].join('-');
   const getProfile=()=>db.profile||null;
   const emailOK=s=>/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
@@ -68,30 +68,38 @@
   const headers=['Date','Début','Fin','Nom','Prénom','Téléphone','E-mail','Motif','Durée (min)','Statut','Documents'];
   const allRows=()=>[headers,...db.appointments.slice().sort((a,b)=>a.date.localeCompare(b.date)||a.start-b.start).map(row)];
   function address(){const a=clean(db.exportEmail);if(!emailOK(a)){toast('Configurez une adresse e-mail dans Réglages.');return null}return a}
-  function exportAgenda(){
+  function exportAgenda(mode='email'){
     if(role!=='admin')return;
     const a=address();if(!a)return;
     if(!window.RVExport)return toast('Partage Android indisponible.');
-    if(confirm('Préparer le fichier Excel de tous les rendez-vous fictifs pour '+a+' ?'))window.RVExport.shareExcel(JSON.stringify(allRows()),a);
+    if(confirm('Préparer le fichier Excel de tous les rendez-vous fictifs pour '+a+' ?'))window.RVExport.shareExcelMode(JSON.stringify(allRows()),a,mode);
   }
-  function sendAppointment(id){
+  function sendAppointment(id,mode='email'){
     if(role!=='admin')return;
     const a=db.appointments.find(x=>x.id===id),to=address();
     if(!a||!to)return;
     const docs=db.docs.filter(d=>d.appointment===id);
     const summary=headers.map((h,i)=>h+' : '+row(a)[i]).join('\n');
     if(!window.RVExport)return toast('Partage Android indisponible.');
-    if(confirm('Préparer un e-mail de test pour '+to+' avec '+docs.length+' document(s) fictif(s) ?'))window.RVExport.shareDocuments(JSON.stringify(docs.map(d=>({name:d.name,mime:d.mime,data:d.data.split(',')[1]}))),to,summary);
+    const unlinked=db.docs.filter(d=>d.client===a.client&&!d.appointment).length;
+    if(!docs.length&&unlinked){toast('Des documents ne sont pas associés : ouvrez Documents, puis associez-les au rendez-vous.');return}
+    if(!confirm('Préparer '+(mode==='email'?'un e-mail':'un partage')+' : '+docs.length+' document(s) joint(s)'+(unlinked?' · '+unlinked+' non associé(s), exclu(s)':'')+' ?'))return;
+    try{
+      const payload=docs.map(d=>{if(typeof d.data!=='string'||!d.data.includes(','))throw Error('Document illisible : '+d.name);return {name:d.name,mime:d.mime,data:d.data.split(',')[1],id:d.id,from:d.from,date:d.date}});
+      window.RVExport.shareAppointmentBundle(JSON.stringify(payload),to,summary,a.id,mode);
+    }catch(e){toast(e.message)}
+
   }
   entry=function(a){
     const html=oldEntry(a);if(role!=='admin')return html;
     const p=a.profile||{};const docs=db.docs.filter(d=>d.appointment===a.id);
-    return html.slice(0,-6)+'<p class="muted">'+E(p.email||'E-mail non renseigné')+' · '+E(p.phone||'Téléphone non renseigné')+'</p><p class="muted">'+docs.length+' document(s)</p><button class="secondary" data-mail-id="'+E(a.id)+'">Envoyer par e-mail</button></div>';
+    return html.slice(0,-6)+'<p class="muted">'+E(p.email||'E-mail non renseigné')+' · '+E(p.phone||'Téléphone non renseigné')+'</p><p class="muted">'+docs.length+' document(s) associé(s)</p>'+docs.map(d=>'<p class="muted">📎 '+E(d.name)+'</p>').join('')+'<div class="row"><button class="secondary" data-mail-id="'+E(a.id)+'">Envoyer par e-mail</button><button class="secondary" data-share-id="'+E(a.id)+'">Partager le dossier ZIP</button></div></div>';
   };
   agenda=function(){
     oldAgenda();
     const input=el.querySelector('input[type=date]');if(input){const lab=input.previousElementSibling;input.replaceWith(monthView(true));lab?.remove()}
-    const b=document.createElement('button');b.className='secondary full';b.textContent='Exporter tous les rendez-vous (.xlsx) par e-mail';b.onclick=exportAgenda;el.querySelector('.card')?.append(b);
+    const b=document.createElement('button');b.className='secondary full';b.textContent='Exporter tous les rendez-vous (.xlsx) par e-mail';b.onclick=()=>exportAgenda('email');el.querySelector('.card')?.append(b);
+    const share=document.createElement('button');share.className='secondary full';share.textContent='Partager le fichier Excel';share.onclick=()=>exportAgenda('share');el.querySelector('.card')?.append(share);
     // Keep the selected day visible, but never hide bookings on other dates.
     const active=db.appointments.filter(a=>a.status!=='cancelled').sort((a,b)=>a.date.localeCompare(b.date)||a.start-b.start);
     const month=el.querySelector('.rv-month');
@@ -101,7 +109,34 @@
     const overview=document.createElement('section');overview.className='card';
     overview.innerHTML='<h2>Tous les rendez-vous actifs ('+active.length+')</h2>'+ (active.length?active.map(a=>entry(a)).join(''):'<p>Aucun rendez-vous actif enregistré.</p>');
     el.append(overview);
-    el.querySelectorAll('[data-mail-id]').forEach(b=>b.onclick=()=>sendAppointment(b.dataset.mailId));
+    el.querySelectorAll('[data-mail-id]').forEach(b=>b.onclick=()=>sendAppointment(b.dataset.mailId,'email'));
+    el.querySelectorAll('[data-share-id]').forEach(b=>b.onclick=()=>sendAppointment(b.dataset.shareId,'share'));
+  };
+  docs=function(){
+    oldDocs();
+    const options=(owner,selected)=>'<option value="">Sans rendez-vous associé</option>'+db.appointments.filter(a=>a.client===owner).map(a=>'<option value="'+E(a.id)+'" '+(selected===a.id?'selected':'')+'>'+E(a.date+' · '+Core.hh(a.start)+' · '+a.name)+'</option>').join('');
+    const form=document.getElementById('file')?.closest('.card');
+    if(form){
+      const label=document.createElement('label');label.textContent='Associer au rendez-vous (facultatif)';
+      const select=document.createElement('select');select.id='rv-doc-appointment';select.innerHTML=options(client,'');
+      form.append(label,select);
+    }
+    for(const d of db.docs.filter(d=>d.client===client)){
+      const target=document.getElementById('doc-'+d.id)?.closest('.card');if(!target)continue;
+      const label=document.createElement('label');label.textContent='Rendez-vous associé';
+      const select=document.createElement('select');select.innerHTML=options(d.client,d.appointment||'');select.value=d.appointment||'';
+      const button=document.createElement('button');button.className='secondary';button.textContent='Enregistrer le lien';
+      button.onclick=()=>{const id=select.value;if(id&&!db.appointments.some(a=>a.id===id&&a.client===d.client))return toast('Rendez-vous invalide.');if(update(()=>{const target=db.docs.find(x=>x.id===d.id);if(id)target.appointment=id;else delete target.appointment})){docs();toast('Lien enregistré.')}};
+      target.append(label,select,button);
+    }
+  };
+  sendDoc=async function(){
+    try{
+      const id=document.getElementById('rv-doc-appointment')?.value||'';
+      if(id&&!db.appointments.some(a=>a.id===id&&a.client===client))return toast('Rendez-vous invalide.');
+      const f=await readFile(document.getElementById('file').files[0]);if(!f)return toast('Choisissez un fichier.');
+      if(update(()=>db.docs.push({...f,id:uid(),client,from:role,date:new Date().toISOString(),...(id?{appointment:id}:{})}))){docs();toast('Document enregistré'+(id?' et associé.':'.'))}
+    }catch(e){toast(e.message)}
   };
   const oldMine=mine;
   mine=function(){
