@@ -18,18 +18,26 @@ Future<void> main() async {
   final checker = UpdateChecker(httpClient: client, preferences: prefs,
     comparator: comparator, manifestUrl: manifest, githubOwner: 'pilialvu75-hue',
     githubRepo: repository, targetPlatform: UpdateTargetPlatform.android,
+    requireApkSha256: true, manifestOnly: true,
     windowsSetupAssetName: 'AIVEXUS-RendezVous-Setup-x64.exe',
     macosDmgAssetName: 'AIVEXUS-RendezVous-macOS.dmg', linuxDebAssetName: 'AIVEXUS-RendezVous-Linux-amd64.deb');
   final manager = UpdateManager(updateChecker: checker, comparator: comparator,
     preferences: prefs, intentHandler: AndroidIntentHandler(), currentVersion: info.version,
-    allowDebugSignatureMismatchBypass: false, enableAndroidBetaBuildNumberComparison: true);
+    allowDebugSignatureMismatchBypass: false, requireApkSha256: true,
+    enableAndroidBetaBuildNumberComparison: true);
   runApp(MaterialApp(title: 'AIVEXUS RendezVous', theme: ThemeData(colorSchemeSeed: const Color(0xff125566)),
     home: RendezVous(manager: manager, client: client, preferences: prefs)));
 }
 
 String updateError(UpdateState s) {
   final message = (s.errorMessage ?? s.diagnostics.lastException ?? '').toLowerCase();
-  if (message.contains('signature') || message.contains('verification') || message.contains('not valid') || message.contains('versioncode') || message.contains('split apk')) {
+  if (message.contains('signature')) {
+    return 'La signature de la mise à jour n’a pas pu être confirmée. L’application installée est conservée. Contactez l’assistance.';
+  }
+  if (message.contains('sha-256') || message.contains('sha256') || message.contains('checksum') || message.contains('integrity')) {
+    return 'Le fichier de mise à jour n’a pas passé le contrôle d’intégrité. Réessayez le téléchargement.';
+  }
+  if (message.contains('verification') || message.contains('not valid') || message.contains('versioncode') || message.contains('split apk')) {
     return 'La mise à jour a été bloquée pour votre sécurité. Réessayez ou contactez l’assistance.';
   }
   if (s.diagnostics.canRequestPackageInstalls == false && s.diagnostics.apkDownloaded) {
