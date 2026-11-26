@@ -1,15 +1,15 @@
 {
-  "version": "0.2.8",
-  "versionName": "0.2.8",
-  "versionCode": 10,
+  "version": "0.2.9",
+  "versionName": "0.2.9",
+  "versionCode": 11,
   "channel": "stable",
   "min_supported": "0.2.2",
-  "apk_url": "https://github.com/pilialvu75-hue/AIVEXUS-RendezVous/releases/download/v0.2.8/rendezvous-0.2.8.apk",
-  "apkUrl": "https://github.com/pilialvu75-hue/AIVEXUS-RendezVous/releases/download/v0.2.8/rendezvous-0.2.8.apk",
-  "sha256": "cc3b82d5387ff77c41570f6ab689a065dcc610b0d3ca0ae6eb6230e2190bd10d",
-  "apk_sha256": "cc3b82d5387ff77c41570f6ab689a065dcc610b0d3ca0ae6eb6230e2190bd10d",
+  "apk_url": "https://github.com/pilialvu75-hue/AIVEXUS-RendezVous/releases/download/v0.2.9/rendezvous-0.2.9.apk",
+  "apkUrl": "https://github.com/pilialvu75-hue/AIVEXUS-RendezVous/releases/download/v0.2.9/rendezvous-0.2.9.apk",
+  "sha256": "34341618b48c4fffb37e06ffc666448aaa377d10b44b54190d45c66fb6ccaf2e",
+  "apk_sha256": "34341618b48c4fffb37e06ffc666448aaa377d10b44b54190d45c66fb6ccaf2e",
   "apk_size_bytes": 48554361,
-  "changelog": "T\u00e9l\u00e9chargement direct et confirmation Android unique",
+  "changelog": "Validation du parcours de mise \u00e0 jour simplifi\u00e9",
   "forceUpdate": false,
   "critical": false
 }
