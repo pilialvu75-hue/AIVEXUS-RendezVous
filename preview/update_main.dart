@@ -24,7 +24,7 @@ Future<void> main() async {
     preferences: prefs, intentHandler: AndroidIntentHandler(), currentVersion: info.version,
     allowDebugSignatureMismatchBypass: false, enableAndroidBetaBuildNumberComparison: true);
   runApp(MaterialApp(title: 'AIVEXUS RendezVous', theme: ThemeData(colorSchemeSeed: const Color(0xff125566)),
-    home: RendezVous(manager: manager, client: client)));
+    home: RendezVous(manager: manager, client: client, preferences: prefs)));
 }
 
 String updateError(UpdateState s) {
@@ -41,7 +41,31 @@ String updateError(UpdateState s) {
 }
 
 class UpdateNoticePolicy {
+  UpdateNoticePolicy({this.preferences});
+  final SharedPreferences? preferences;
   final Set<String> _seen = {};
+  final Set<String> _readySeen = {};
+  static const _deferredKey = 'rv_deferred_update_install_path';
+  String? readyKey(UpdateState s) {
+    if (s.status != UpdateStatus.readyToInstall || !s.diagnostics.apkDownloaded || !s.diagnostics.apkFileExists) return null;
+    final path = s.tempApkPath ?? s.diagnostics.apkPath;
+    return path == null || path.isEmpty ? null : path;
+  }
+  bool shouldPromptInstall(UpdateState s) {
+    final key = readyKey(s);
+    return key != null && !_readySeen.contains(key) && preferences?.getString(_deferredKey) != key;
+  }
+  void markInstallSeen(UpdateState s) {
+    final key = readyKey(s);
+    if (key != null) _readySeen.add(key);
+  }
+  Future<void> deferInstall(UpdateState s) async {
+    final key = readyKey(s);
+    if (key != null) {
+      _readySeen.add(key);
+      await preferences?.setString(_deferredKey, key);
+    }
+  }
   String? availableKey(UpdateState s) {
     if (!s.hasUpdate || s.usedCachedManifest || s.latestManifest == null) return null;
     return '${s.preferredChannel.name}:${s.latestManifest!.version}:${s.latestManifest!.versionCode ?? ""}';
@@ -57,14 +81,15 @@ class UpdateNoticePolicy {
 }
 
 class RendezVous extends StatefulWidget {
-  const RendezVous({super.key, required this.manager, required this.client});
+  const RendezVous({super.key, required this.manager, required this.client, required this.preferences});
   final UpdateManager manager;
   final http.Client client;
+  final SharedPreferences preferences;
   @override State<RendezVous> createState() => _RendezVousState();
 }
 
 class _RendezVousState extends State<RendezVous> with WidgetsBindingObserver {
-  final notices=UpdateNoticePolicy();
+  late final notices=UpdateNoticePolicy(preferences: widget.preferences);
   bool _pageOpen=false, _promptOpen=false, _scheduled=false, _foreground=true;
   String? _lastError;
 
@@ -93,8 +118,29 @@ class _RendezVousState extends State<RendezVous> with WidgetsBindingObserver {
     _scheduled=true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       _scheduled=false;
-      if(!mounted || !_foreground || _pageOpen || _promptOpen || ModalRoute.of(context)?.isCurrent!=true) return;
+      if(!mounted || !_foreground || _promptOpen || (!_pageOpen && ModalRoute.of(context)?.isCurrent!=true)) return;
       final s=widget.manager.state.value;
+      if(notices.shouldPromptInstall(s)) {
+        notices.markInstallSeen(s);
+        _promptOpen=true;
+        try {
+          final accepted=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
+            title:const Text('Mise à jour prête'),
+            content:const Text('Le téléchargement est terminé. Voulez-vous mettre à jour RendezVous maintenant ?'),
+            actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Plus tard')),
+              FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Mettre à jour'))]));
+          if(accepted==true&&mounted) {
+            if(notices.readyKey(widget.manager.state.value)==notices.readyKey(s)) {
+              final ok=await installReadyUpdate(context,widget.manager);
+              if(!ok&&mounted&&widget.manager.state.value.status==UpdateStatus.error&&!_pageOpen) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(updateError(widget.manager.state.value))));
+              }
+            }
+          } else { await notices.deferInstall(s); }
+        } finally { _promptOpen=false; }
+        return;
+      }
+      if(_pageOpen) return;
       if(s.status==UpdateStatus.error) {
         final error=updateError(s);
         if(_lastError!=error) {
@@ -112,7 +158,10 @@ class _RendezVousState extends State<RendezVous> with WidgetsBindingObserver {
           content:Text('La version ${s.latestManifest!.version} est disponible. Voulez-vous consulter la mise à jour ?'),
           actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Plus tard')),
             FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Voir la mise à jour'))]));
-        if(accepted==true&&mounted) await showUpdates();
+        if(accepted==true&&mounted) {
+          _promptOpen=false;
+          await showUpdates();
+        }
       } finally { _promptOpen=false; }
       if(mounted) _stateChanged();
     });
@@ -124,7 +173,7 @@ class _RendezVousState extends State<RendezVous> with WidgetsBindingObserver {
     _pageOpen=true;
     notices.markSeen(widget.manager.state.value);
     try {
-      await Navigator.of(context).push<void>(MaterialPageRoute(builder:(_)=>UpdatePanel(manager:widget.manager)));
+      await Navigator.of(context).push<void>(MaterialPageRoute(builder:(_)=>UpdatePanel(manager:widget.manager,notices:notices)));
     } finally { _pageOpen=false; if(mounted) _stateChanged(); }
   }
 
@@ -138,8 +187,9 @@ class _RendezVousState extends State<RendezVous> with WidgetsBindingObserver {
 }
 
 class UpdatePanel extends StatefulWidget {
-  const UpdatePanel({super.key, required this.manager});
+  const UpdatePanel({super.key, required this.manager, required this.notices});
   final UpdateManager manager;
+  final UpdateNoticePolicy notices;
   @override State<UpdatePanel> createState()=>_UpdatePanelState();
 }
 
@@ -172,30 +222,16 @@ class _UpdatePanelState extends State<UpdatePanel> with WidgetsBindingObserver {
     UpdateStatus.error=>'Mise à jour indisponible',
   };
   Future<void> download(UpdateState s) async {
-    final accepted=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
-      title:const Text('Télécharger la mise à jour ?'),
-      content:Text('Version ${s.latestManifest!.version}. Vous pourrez confirmer l’installation ensuite.'),
-      actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Plus tard')),FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Télécharger'))]));
-    if(accepted!=true||!mounted)return;
-    if(manager.state.value.latestManifest?.version!=s.latestManifest?.version||!manager.state.value.hasUpdate||manager.state.value.usedCachedManifest)return;
+    if(!mounted || manager.state.value.latestManifest?.version!=s.latestManifest?.version||!manager.state.value.hasUpdate||manager.state.value.usedCachedManifest)return;
     await manager.downloadLatestApk();
     await manager.refreshDiagnostics();
   }
   Future<void> install() async {
-    await manager.refreshDiagnostics();
-    if(!mounted)return;
-    if(manager.state.value.diagnostics.canRequestPackageInstalls==false){
-      final accepted=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
-        title:const Text('Autorisation Android nécessaire'),
-        content:const Text('Autorisez RendezVous à installer ses mises à jour, puis revenez ici pour confirmer l’installation.'),
-        actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Annuler')),FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Ouvrir les paramètres'))]));
-      if(accepted==true&&mounted){
-        final ok=await manager.openUnknownAppsSettings();
-        if(!ok&&mounted)setState(()=>_localError='Impossible d’ouvrir les paramètres Android.');
-      }
-      return;
+    widget.notices.markInstallSeen(manager.state.value);
+    final ok=await installReadyUpdate(context,manager);
+    if(!ok&&mounted&&manager.state.value.status!=UpdateStatus.error && manager.state.value.diagnostics.canRequestPackageInstalls!=false) {
+      setState(()=>_localError='Impossible de lancer l’installation. Réessayez.');
     }
-    await manager.prepareInstallIntent();
   }
   @override Widget build(BuildContext context)=>Scaffold(
     appBar:AppBar(title:const Text('Mises à jour')),
@@ -217,7 +253,7 @@ class _UpdatePanelState extends State<UpdatePanel> with WidgetsBindingObserver {
         ],
         const SizedBox(height:24),
         if(s.hasUpdate&&!s.usedCachedManifest) FilledButton(onPressed:busy?null:()=>run(()=>download(s)),child:const Text('Télécharger')),
-        if(ready) FilledButton(onPressed:busy?null:()=>run(install),child:const Text('Installer')),
+        if(ready) FilledButton(onPressed:busy?null:()=>run(install),child:const Text('Mettre à jour')),
         OutlinedButton(onPressed:busy||ready?null:()=>run(()async{await manager.checkForUpdates(allowCachedFallback:false);await manager.refreshDiagnostics();}),child:const Text('Rechercher une mise à jour')),
         const SizedBox(height:24),
         const Text('Canal de mise à jour'),
@@ -226,4 +262,21 @@ class _UpdatePanelState extends State<UpdatePanel> with WidgetsBindingObserver {
           onChanged:busy||ready?null:(c){if(c!=null)unawaited(run(()=>manager.setPreferredChannel(c)));}),
       ]);
     }));
+}
+
+Future<bool> installReadyUpdate(BuildContext context, UpdateManager manager) async {
+  await manager.refreshDiagnostics();
+  if(!context.mounted || manager.state.value.status!=UpdateStatus.readyToInstall) return false;
+  if(manager.state.value.diagnostics.canRequestPackageInstalls==false){
+    final accepted=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
+      title:const Text('Autorisation Android nécessaire'),
+      content:const Text('Autorisez RendezVous à installer ses mises à jour, puis confirmez l’installation.'),
+      actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Annuler')),FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Ouvrir les paramètres'))]));
+    if(accepted==true&&context.mounted){
+      final ok=await manager.openUnknownAppsSettings();
+      if(!ok&&context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Impossible d’ouvrir les paramètres Android.')));
+    }
+    return false;
+  }
+  return manager.prepareInstallIntent();
 }
