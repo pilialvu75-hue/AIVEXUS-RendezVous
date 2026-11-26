@@ -9,8 +9,8 @@ on:
         description: 'Next test version only; do not skip the physical test'
         required: true
         type: choice
-        options: ['0.2.2', '0.2.3', '0.2.4', '0.2.5']
-        default: '0.2.5'
+        options: ['0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6']
+        default: '0.2.6'
 permissions:
   contents: read
 concurrency:
@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
-      VERSION: ${{ inputs.version || '0.2.5' }}
+      VERSION: ${{ inputs.version || '0.2.6' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -95,9 +95,13 @@ jobs:
             0.2.3) code=5 ;;
             0.2.4) code=6 ;;
             0.2.5) code=7 ;;
+            0.2.6) code=8 ;;
             *) exit 1 ;;
           esac
+          cp ../preview/update_main.dart overlay/lib/main.dart
           python3 prepare.py
+          mkdir -p generated/test
+          cp ../preview/update_notice_test.dart generated/test/update_notice_test.dart
           python3 - <<'PY'
           from pathlib import Path
           p=Path('generated/android/app/src/main/AndroidManifest.xml')
@@ -108,6 +112,7 @@ jobs:
           cd generated
           flutter pub get
           flutter analyze --no-fatal-infos --no-fatal-warnings
+          flutter test test/update_notice_test.dart
           flutter build apk --release --build-name "$VERSION" --build-number "$code"
           mkdir -p ../../out
           cp build/app/outputs/flutter-apk/app-release.apk ../../out/candidate.apk
@@ -124,7 +129,7 @@ jobs:
     permissions:
       contents: write
     env:
-      VERSION: ${{ inputs.version || '0.2.5' }}
+      VERSION: ${{ inputs.version || '0.2.6' }}
       EXPECTED_SIGNER: ${{ vars.RV_SIGNER_SHA256 }}
     steps:
       - uses: actions/checkout@v4
@@ -145,6 +150,7 @@ jobs:
             0.2.3) previous=0.2.2; code=5 ;;
             0.2.4) previous=0.2.3; code=6 ;;
             0.2.5) previous=0.2.4; code=7 ;;
+            0.2.6) previous=0.2.5; code=8 ;;
             *) exit 1 ;;
           esac
           python3 -c 'import json,sys; m=json.load(open("update/version.json")); assert m["version"]==sys.argv[1] and m["versionCode"]==int(sys.argv[2])-1, "Release sequence mismatch"' "$previous" "$code"
@@ -199,7 +205,7 @@ jobs:
           a=pathlib.Path('signed')/f'rendezvous-{version}.apk'
           url=f'https://github.com/pilialvu75-hue/AIVEXUS-RendezVous/releases/download/v{version}/rendezvous-{version}.apk'
           h=hashlib.sha256(a.read_bytes()).hexdigest()
-          m=dict(version=version,versionName=version,versionCode=code,channel='stable',min_supported='0.2.2',apk_url=url,apkUrl=url,sha256=h,apk_sha256=h,apk_size_bytes=a.stat().st_size,changelog='Pilote OTA — documents associés, dossier ZIP et partage e-mail',forceUpdate=False,critical=False)
+          m=dict(version=version,versionName=version,versionCode=code,channel='stable',min_supported='0.2.2',apk_url=url,apkUrl=url,sha256=h,apk_sha256=h,apk_size_bytes=a.stat().st_size,changelog='Interface de mise à jour simplifiée, notification automatique et diagnostic intégré',forceUpdate=False,critical=False)
           pathlib.Path('update/version.json').write_text(json.dumps(m,indent=2)+'\n')
           PY
           git config user.name 'github-actions[bot]'
