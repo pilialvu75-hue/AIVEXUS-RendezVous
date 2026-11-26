@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:aivexus_original_updater/aivexus_original_updater.dart';
 import '../lib/main.dart';
 
@@ -17,6 +18,22 @@ void main(){
     expect(p.shouldPrompt(state(version:'0.2.7',code:9)),true);
     expect(p.shouldPrompt(state(code:9)),true);
     expect(p.shouldPrompt(state(channel:ReleaseChannel.stable)),true);
+  });
+  test('Install prompt requires verified staged APK; defer persists without another prompt',() async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs=await SharedPreferences.getInstance();
+    final ready=state(status:UpdateStatus.readyToInstall).copyWith(tempApkPath:'/test/rv-027.apk',diagnostics:const UpdateDiagnostics(apkDownloaded:true,apkFileExists:true));
+    final p=UpdateNoticePolicy(preferences:prefs);
+    expect(p.shouldPromptInstall(state()),false);
+    expect(p.shouldPromptInstall(ready.copyWith(diagnostics:const UpdateDiagnostics(apkDownloaded:true))),false);
+    expect(p.shouldPromptInstall(ready),true);
+    p.markInstallSeen(ready);
+    expect(p.shouldPromptInstall(ready),false);
+    await p.deferInstall(ready);
+    final restarted=UpdateNoticePolicy(preferences:prefs);
+    expect(restarted.shouldPromptInstall(ready),false);
+    expect(restarted.shouldPromptInstall(ready.copyWith(tempApkPath:'/test/rv-028.apk')),true);
+    expect(restarted.readyKey(ready),isNotNull);
   });
   test('User errors are localized and do not expose exception details',(){
     final s=state(status:UpdateStatus.error).copyWith(errorMessage:'APK signature does not match /private/path');
