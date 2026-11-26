@@ -121,22 +121,19 @@ class _RendezVousState extends State<RendezVous> with WidgetsBindingObserver {
       if(!mounted || !_foreground || _promptOpen || (!_pageOpen && ModalRoute.of(context)?.isCurrent!=true)) return;
       final s=widget.manager.state.value;
       if(notices.shouldPromptInstall(s)) {
+        // The Android system installer is the only installation confirmation.
+        // Persist the attempted prompt before opening it: cancellation or
+        // backgrounding must not cause another automatic launch.
         notices.markInstallSeen(s);
         _promptOpen=true;
         try {
-          final accepted=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
-            title:const Text('Mise à jour prête'),
-            content:const Text('Le téléchargement est terminé. Voulez-vous mettre à jour RendezVous maintenant ?'),
-            actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Plus tard')),
-              FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Mettre à jour'))]));
-          if(accepted==true&&mounted) {
-            if(notices.readyKey(widget.manager.state.value)==notices.readyKey(s)) {
-              final ok=await installReadyUpdate(context,widget.manager);
-              if(!ok&&mounted&&widget.manager.state.value.status==UpdateStatus.error&&!_pageOpen) {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(updateError(widget.manager.state.value))));
-              }
+          await notices.deferInstall(s);
+          if(mounted && _foreground && notices.readyKey(widget.manager.state.value)==notices.readyKey(s)) {
+            final ok=await installReadyUpdate(context,widget.manager);
+            if(!ok&&mounted&&widget.manager.state.value.status==UpdateStatus.error&&!_pageOpen) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(updateError(widget.manager.state.value))));
             }
-          } else { await notices.deferInstall(s); }
+          }
         } finally { _promptOpen=false; }
         return;
       }
@@ -155,12 +152,12 @@ class _RendezVousState extends State<RendezVous> with WidgetsBindingObserver {
       try {
         final accepted=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
           title:const Text('Nouvelle mise à jour'),
-          content:Text('La version ${s.latestManifest!.version} est disponible. Voulez-vous consulter la mise à jour ?'),
+          content:Text('La version ${s.latestManifest!.version} est disponible. Voulez-vous la télécharger ?'),
           actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Plus tard')),
-            FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Voir la mise à jour'))]));
+            FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Télécharger'))]));
         if(accepted==true&&mounted) {
           _promptOpen=false;
-          await showUpdates();
+          await showUpdates(approvedDownload:s);
         }
       } finally { _promptOpen=false; }
       if(mounted) _stateChanged();
@@ -168,12 +165,12 @@ class _RendezVousState extends State<RendezVous> with WidgetsBindingObserver {
     WidgetsBinding.instance.ensureVisualUpdate();
   }
 
-  Future<void> showUpdates() async {
+  Future<void> showUpdates({UpdateState? approvedDownload}) async {
     if(_pageOpen||!mounted) return;
     _pageOpen=true;
     notices.markSeen(widget.manager.state.value);
     try {
-      await Navigator.of(context).push<void>(MaterialPageRoute(builder:(_)=>UpdatePanel(manager:widget.manager,notices:notices)));
+      await Navigator.of(context).push<void>(MaterialPageRoute(builder:(_)=>UpdatePanel(manager:widget.manager,notices:notices,approvedDownload:approvedDownload)));
     } finally { _pageOpen=false; if(mounted) _stateChanged(); }
   }
 
@@ -187,9 +184,10 @@ class _RendezVousState extends State<RendezVous> with WidgetsBindingObserver {
 }
 
 class UpdatePanel extends StatefulWidget {
-  const UpdatePanel({super.key, required this.manager, required this.notices});
+  const UpdatePanel({super.key, required this.manager, required this.notices, this.approvedDownload});
   final UpdateManager manager;
   final UpdateNoticePolicy notices;
+  final UpdateState? approvedDownload;
   @override State<UpdatePanel> createState()=>_UpdatePanelState();
 }
 
@@ -201,6 +199,10 @@ class _UpdatePanelState extends State<UpdatePanel> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     unawaited(manager.refreshDiagnostics());
+    final approved=widget.approvedDownload;
+    if(approved!=null) WidgetsBinding.instance.addPostFrameCallback((_){
+      if(mounted) unawaited(run(()=>download(approved)));
+    });
   }
   @override void didChangeAppLifecycleState(AppLifecycleState state){
     if(state==AppLifecycleState.resumed) unawaited(manager.refreshDiagnostics());
@@ -227,7 +229,8 @@ class _UpdatePanelState extends State<UpdatePanel> with WidgetsBindingObserver {
     await manager.refreshDiagnostics();
   }
   Future<void> install() async {
-    widget.notices.markInstallSeen(manager.state.value);
+    await widget.notices.deferInstall(manager.state.value);
+    if(!mounted)return;
     final ok=await installReadyUpdate(context,manager);
     if(!ok&&mounted&&manager.state.value.status!=UpdateStatus.error && manager.state.value.diagnostics.canRequestPackageInstalls!=false) {
       setState(()=>_localError='Impossible de lancer l’installation. Réessayez.');
