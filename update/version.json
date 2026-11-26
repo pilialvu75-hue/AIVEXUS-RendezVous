@@ -1,15 +1,15 @@
 {
-  "version": "0.2.6",
-  "versionName": "0.2.6",
-  "versionCode": 8,
+  "version": "0.2.7",
+  "versionName": "0.2.7",
+  "versionCode": 9,
   "channel": "stable",
   "min_supported": "0.2.2",
-  "apk_url": "https://github.com/pilialvu75-hue/AIVEXUS-RendezVous/releases/download/v0.2.6/rendezvous-0.2.6.apk",
-  "apkUrl": "https://github.com/pilialvu75-hue/AIVEXUS-RendezVous/releases/download/v0.2.6/rendezvous-0.2.6.apk",
-  "sha256": "164a7978660dd8b360a01a8158762071d96a52728ec4173bdd423685d0af3ebc",
-  "apk_sha256": "164a7978660dd8b360a01a8158762071d96a52728ec4173bdd423685d0af3ebc",
+  "apk_url": "https://github.com/pilialvu75-hue/AIVEXUS-RendezVous/releases/download/v0.2.7/rendezvous-0.2.7.apk",
+  "apkUrl": "https://github.com/pilialvu75-hue/AIVEXUS-RendezVous/releases/download/v0.2.7/rendezvous-0.2.7.apk",
+  "sha256": "c64a98e5c1074993f73ef68f9eb1f6fddb9afe564e0edb687de740839d7f8cc8",
+  "apk_sha256": "c64a98e5c1074993f73ef68f9eb1f6fddb9afe564e0edb687de740839d7f8cc8",
   "apk_size_bytes": 48554361,
-  "changelog": "Interface de mise \u00e0 jour simplifi\u00e9e, notification automatique et diagnostic int\u00e9gr\u00e9",
+  "changelog": "Confirmation automatique apr\u00e8s t\u00e9l\u00e9chargement et installation diff\u00e9r\u00e9e",
   "forceUpdate": false,
   "critical": false
 }
