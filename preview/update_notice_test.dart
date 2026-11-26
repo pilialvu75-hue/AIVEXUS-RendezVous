@@ -37,7 +37,9 @@ void main(){
   });
   test('User errors are localized and do not expose exception details',(){
     final s=state(status:UpdateStatus.error).copyWith(errorMessage:'APK signature does not match /private/path');
-    expect(updateError(s),contains('sécurité'));
+    expect(updateError(s),contains('signature'));
+    expect(updateError(s),contains('conservée'));
+    expect(updateError(s.copyWith(errorMessage:'APK SHA-256 checksum mismatch')),contains('intégrité'));
     expect(updateError(s),isNot(contains('/private/path')));
   });
 }
