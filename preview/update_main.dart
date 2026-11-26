@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:aivexus_original_diagnostics/aivexus_original_diagnostics.dart';
 import 'package:aivexus_original_updater/aivexus_original_updater.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -11,6 +13,7 @@ const manifest = 'https://raw.githubusercontent.com/pilialvu75-hue/$repository/m
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await DiagnosticSession.instance.start();
   final prefs = await SharedPreferences.getInstance();
   final info = await PackageInfo.fromPlatform();
   final client = http.Client();
@@ -25,7 +28,10 @@ Future<void> main() async {
     preferences: prefs, intentHandler: AndroidIntentHandler(), currentVersion: info.version,
     allowDebugSignatureMismatchBypass: false, requireApkSha256: true,
     enableAndroidBetaBuildNumberComparison: true);
-  runApp(MaterialApp(title: 'AIVEXUS RendezVous', theme: ThemeData(colorSchemeSeed: const Color(0xff125566)),
+  runApp(MaterialApp(title: 'AIVEXUS RendezVous',
+    locale: const Locale('fr'), supportedLocales: const [Locale('fr'), Locale('it'), Locale('en'), Locale('es')],
+    localizationsDelegates: GlobalMaterialLocalizations.delegates,
+    theme: ThemeData(colorSchemeSeed: const Color(0xff125566)),
     home: RendezVous(manager: manager, client: client, preferences: prefs)));
 }
 
@@ -100,6 +106,20 @@ class _RendezVousState extends State<RendezVous> with WidgetsBindingObserver {
   late final notices=UpdateNoticePolicy(preferences: widget.preferences);
   bool _pageOpen=false, _promptOpen=false, _scheduled=false, _foreground=true;
   String? _lastError;
+  UpdateStatus? _lastDiagnosticStatus;
+
+  void _recordUpdateTransition() {
+    final status = widget.manager.state.value.status;
+    if (status == _lastDiagnosticStatus) return;
+    _lastDiagnosticStatus = status;
+    final event = switch (status) {
+      UpdateStatus.checking || UpdateStatus.downloading => DiagnosticEvent.started,
+      UpdateStatus.readyToInstall || UpdateStatus.upToDate => DiagnosticEvent.completed,
+      UpdateStatus.error => DiagnosticEvent.failed,
+      _ => null,
+    };
+    if (event != null) AivexusDiagnostics.instance.record(DiagnosticComponent.updater, event);
+  }
 
   @override void initState() {
     super.initState();
@@ -122,6 +142,7 @@ class _RendezVousState extends State<RendezVous> with WidgetsBindingObserver {
   }
 
   void _stateChanged() {
+    _recordUpdateTransition();
     if (_scheduled || !mounted) return;
     _scheduled=true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -183,7 +204,7 @@ class _RendezVousState extends State<RendezVous> with WidgetsBindingObserver {
   }
 
   @override Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('AIVEXUS RendezVous'), actions: [
+    appBar: AppBar(title: const HiddenDiagnosticsEntry(child: Text('AIVEXUS RendezVous')), actions: [
       ValueListenableBuilder<UpdateState>(valueListenable: widget.manager.state,
         builder: (_, state, __) => IconButton(tooltip: 'Mises à jour', onPressed: showUpdates,
           icon: Icon(state.hasUpdate || state.status == UpdateStatus.readyToInstall ? Icons.system_update : state.status==UpdateStatus.error ? Icons.error_outline : Icons.update)))

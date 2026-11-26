@@ -3,14 +3,16 @@ on:
   push:
     branches: [main]
     paths: ['.github/workflows/permanent-ota.yml']
+  pull_request:
+    paths: ['preview/update_main.dart', 'preview/install_diagnostics.py', '.github/workflows/permanent-ota.yml']
   workflow_dispatch:
     inputs:
       version:
         description: 'Next test version only; do not skip the physical test'
         required: true
         type: choice
-        options: ['0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10']
-        default: '0.2.10'
+        options: ['0.2.11']
+        default: '0.2.11'
 permissions:
   contents: read
 concurrency:
@@ -18,10 +20,10 @@ concurrency:
   cancel-in-progress: false
 jobs:
   preflight:
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Require owner-provisioned signing identity (no fallback)
+        if: github.ref == 'refs/heads/main'
         env:
           KEYSTORE: ${{ secrets.RV_KEYSTORE_B64 }}
           KEY_PASSWORD: ${{ secrets.RV_KEY_PASSWORD }}
@@ -37,9 +39,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
-      VERSION: ${{ inputs.version || '0.2.10' }}
+      VERSION: ${{ inputs.version || '0.2.11' }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: pilialvu75-hue/AI-Orchestrator-Module-Library
+          ref: e641390200a734a60cd1eac2759207e9431f2dd2
+          path: diagnostics-library
+          persist-credentials: false
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -100,6 +108,7 @@ jobs:
             0.2.8) code=10 ;;
             0.2.9) code=11 ;;
             0.2.10) code=12 ;;
+            0.2.11) code=13 ;;
             *) exit 1 ;;
           esac
           cp ../preview/update_main.dart overlay/lib/main.dart
@@ -112,6 +121,7 @@ jobs:
           assert s.count(old)==1, 'Expected original updater pin not found'
           p.write_text(s.replace(old,new))
           PY
+          python3 ../preview/install_diagnostics.py generated ../diagnostics-library
           mkdir -p generated/test
           cp ../preview/update_notice_test.dart generated/test/update_notice_test.dart
           python3 - <<'PY'
@@ -124,6 +134,7 @@ jobs:
           cd generated
           flutter pub get
           grep -F '5f0b3093c15177dff850a914fcfe52ac7e2fc70a' pubspec.lock
+          grep -F 'e641390200a734a60cd1eac2759207e9431f2dd2' pubspec.lock
           flutter analyze --no-fatal-infos --no-fatal-warnings
           flutter test test/update_notice_test.dart
           flutter build apk --release --build-name "$VERSION" --build-number "$code"
@@ -136,13 +147,14 @@ jobs:
           if-no-files-found: error
           retention-days: 1
   sign-and-publish:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
     env:
-      VERSION: ${{ inputs.version || '0.2.10' }}
+      VERSION: ${{ inputs.version || '0.2.11' }}
       EXPECTED_SIGNER: ${{ vars.RV_SIGNER_SHA256 }}
     steps:
       - uses: actions/checkout@v4
@@ -168,6 +180,7 @@ jobs:
             0.2.8) previous=0.2.7; code=10 ;;
             0.2.9) previous=0.2.8; code=11 ;;
             0.2.10) previous=0.2.9; code=12 ;;
+            0.2.11) previous=0.2.10; code=13 ;;
             *) exit 1 ;;
           esac
           python3 -c 'import json,sys; m=json.load(open("update/version.json")); assert m["version"]==sys.argv[1] and m["versionCode"]==int(sys.argv[2])-1, "Release sequence mismatch"' "$previous" "$code"
@@ -224,7 +237,7 @@ jobs:
           a=pathlib.Path('signed')/f'rendezvous-{version}.apk'
           url=f'https://github.com/pilialvu75-hue/AIVEXUS-RendezVous/releases/download/v{version}/rendezvous-{version}.apk'
           h=hashlib.sha256(a.read_bytes()).hexdigest()
-          m=dict(version=version,versionName=version,versionCode=code,channel='stable',min_supported='0.2.2',apk_url=url,apkUrl=url,sha256=h,apk_sha256=h,apk_size_bytes=a.stat().st_size,changelog='Vérification stricte de la signature et de l’intégrité APK',forceUpdate=False,critical=False)
+          m=dict(version=version,versionName=version,versionCode=code,channel='stable',min_supported='0.2.2',apk_url=url,apkUrl=url,sha256=h,apk_sha256=h,apk_size_bytes=a.stat().st_size,changelog='Module diagnostic local : historique, ressources et accès technique par sept appuis',forceUpdate=False,critical=False)
           pathlib.Path('update/version.json').write_text(json.dumps(m,indent=2)+'\n')
           PY
           git config user.name 'github-actions[bot]'
