@@ -99,6 +99,7 @@ jobs:
             *) exit 1 ;;
           esac
           cp ../preview/update_main.dart overlay/lib/main.dart
+          printf '\ndev_dependencies:\n  flutter_test:\n    sdk: flutter\n' >> overlay/pubspec.yaml
           python3 prepare.py
           mkdir -p generated/test
           cp ../preview/update_notice_test.dart generated/test/update_notice_test.dart
