@@ -9,8 +9,8 @@ on:
         description: 'Next test version only; do not skip the physical test'
         required: true
         type: choice
-        options: ['0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9']
-        default: '0.2.9'
+        options: ['0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10']
+        default: '0.2.10'
 permissions:
   contents: read
 concurrency:
@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
-      VERSION: ${{ inputs.version || '0.2.9' }}
+      VERSION: ${{ inputs.version || '0.2.10' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -99,11 +99,19 @@ jobs:
             0.2.7) code=9 ;;
             0.2.8) code=10 ;;
             0.2.9) code=11 ;;
+            0.2.10) code=12 ;;
             *) exit 1 ;;
           esac
           cp ../preview/update_main.dart overlay/lib/main.dart
           printf '\ndev_dependencies:\n  flutter_test:\n    sdk: flutter\n' >> overlay/pubspec.yaml
           python3 prepare.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('generated/pubspec.yaml')
+          s=p.read_text(); old='c715ff93324371f923666a0766035b02b20530ea'; new='5f0b3093c15177dff850a914fcfe52ac7e2fc70a'
+          assert s.count(old)==1, 'Expected original updater pin not found'
+          p.write_text(s.replace(old,new))
+          PY
           mkdir -p generated/test
           cp ../preview/update_notice_test.dart generated/test/update_notice_test.dart
           python3 - <<'PY'
@@ -115,6 +123,7 @@ jobs:
           PY
           cd generated
           flutter pub get
+          grep -F '5f0b3093c15177dff850a914fcfe52ac7e2fc70a' pubspec.lock
           flutter analyze --no-fatal-infos --no-fatal-warnings
           flutter test test/update_notice_test.dart
           flutter build apk --release --build-name "$VERSION" --build-number "$code"
@@ -133,7 +142,7 @@ jobs:
     permissions:
       contents: write
     env:
-      VERSION: ${{ inputs.version || '0.2.9' }}
+      VERSION: ${{ inputs.version || '0.2.10' }}
       EXPECTED_SIGNER: ${{ vars.RV_SIGNER_SHA256 }}
     steps:
       - uses: actions/checkout@v4
@@ -158,6 +167,7 @@ jobs:
             0.2.7) previous=0.2.6; code=9 ;;
             0.2.8) previous=0.2.7; code=10 ;;
             0.2.9) previous=0.2.8; code=11 ;;
+            0.2.10) previous=0.2.9; code=12 ;;
             *) exit 1 ;;
           esac
           python3 -c 'import json,sys; m=json.load(open("update/version.json")); assert m["version"]==sys.argv[1] and m["versionCode"]==int(sys.argv[2])-1, "Release sequence mismatch"' "$previous" "$code"
@@ -187,7 +197,9 @@ jobs:
           mkdir signed
           apk="signed/rendezvous-$VERSION.apk"
           "$signer" sign --ks "$key" --ks-key-alias rendezvous --ks-pass env:KEY_PASSWORD --key-pass env:KEY_PASSWORD --out "$apk" candidate/candidate.apk
-          "$signer" verify --print-certs "$apk" | tee signed/signatures.txt
+          "$signer" verify --verbose --print-certs "$apk" | tee signed/signatures.txt
+          grep -E "Verified using v2 scheme.*: true|Verified using v3 scheme.*: true" signed/signatures.txt
+          grep -F "Number of signers: 1" signed/signatures.txt
           grep -F "certificate SHA-256 digest: $EXPECTED_SIGNER" signed/signatures.txt
           "$aapt" dump badging "$apk" > signed/badging.txt
           grep -F "name='com.aivexus.rendezvous'" signed/badging.txt
@@ -212,7 +224,7 @@ jobs:
           a=pathlib.Path('signed')/f'rendezvous-{version}.apk'
           url=f'https://github.com/pilialvu75-hue/AIVEXUS-RendezVous/releases/download/v{version}/rendezvous-{version}.apk'
           h=hashlib.sha256(a.read_bytes()).hexdigest()
-          m=dict(version=version,versionName=version,versionCode=code,channel='stable',min_supported='0.2.2',apk_url=url,apkUrl=url,sha256=h,apk_sha256=h,apk_size_bytes=a.stat().st_size,changelog='Validation du parcours de mise à jour simplifié',forceUpdate=False,critical=False)
+          m=dict(version=version,versionName=version,versionCode=code,channel='stable',min_supported='0.2.2',apk_url=url,apkUrl=url,sha256=h,apk_sha256=h,apk_size_bytes=a.stat().st_size,changelog='Vérification stricte de la signature et de l’intégrité APK',forceUpdate=False,critical=False)
           pathlib.Path('update/version.json').write_text(json.dumps(m,indent=2)+'\n')
           PY
           git config user.name 'github-actions[bot]'
